@@ -139,8 +139,24 @@ def handle_text_input(message: str, key: str) -> str:
     ]
     return prompt(questions)[key]
 
+def validate_config(config: GitConfig) -> tuple[bool, str]:
+    """Validate configuration before proceeding."""
+    required_fields = ['source_branch', 'target_branch', 'commit_message', 'pr_title']
+    missing_fields = [field for field in required_fields if not config.get_option(field)]
+    
+    if missing_fields:
+        return False, f"Missing required fields: {', '.join(missing_fields)}"
+    return True, ""
+
 def review_config(config: GitConfig) -> bool:
     clear_screen()
+    
+    # Validate configuration
+    is_valid, error_message = validate_config(config)
+    if not is_valid:
+        rprint(f"[bold red]{error_message}[/]")
+        return False
+    
     rprint("[bold]Current configuration:[/]")
     for key, value in config.options.items():
         rprint(f"[cyan]{key}:[/] [green]{value}[/]")
@@ -172,21 +188,37 @@ def get_bitbucket_url() -> str:
         return ""
     return output.strip()
 
+def check_git_status() -> tuple[bool, str]:
+    """Check if there are any changes to commit."""
+    return execute_git_command(['git', 'status', '--porcelain'])
+
 def create_pr(config: GitConfig) -> None:
     with console.status("[bold green]Processing..."):
-        # Stage all changes
-        success, output = execute_git_command(['git', 'add', '.'])
+        # Check if there are any changes to commit
+        success, status_output = check_git_status()
         if not success:
-            rprint(f"[bold red]Error staging changes: {output}[/]")
+            rprint("[bold red]Error checking git status[/]")
             return
+            
+        if not status_output:
+            rprint("[bold yellow]No changes to commit. Checking for unpushed commits...[/]")
+        else:
+            # Stage all changes
+            success, output = execute_git_command(['git', 'add', '.'])
+            if not success:
+                rprint(f"[bold red]Error staging changes: {output}[/]")
+                return
 
-        # Create commit
-        success, output = execute_git_command([
-            'git', 'commit', '-m', config.get_option('commit_message')
-        ])
-        if not success:
-            rprint(f"[bold red]Error creating commit: {output}[/]")
-            return
+            # Create commit
+            success, output = execute_git_command([
+                'git', 'commit', '-m', config.get_option('commit_message')
+            ])
+            if not success:
+                if "nothing to commit" in output:
+                    rprint("[yellow]No changes to commit[/]")
+                else:
+                    rprint(f"[bold red]Error creating commit: {output}[/]")
+                    return
 
         # Push changes
         current_branch = config.get_option('source_branch')
